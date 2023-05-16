@@ -2,8 +2,8 @@ name: Sync Assigned Issues to Target Project
 
 on:
   workflow_dispatch:
-  #schedule:
-  #  - cron: '0 0 * * *' # Run every day at midnight UTC
+  schedule:
+    - cron: '0 0 * * *' # Run every day at midnight UTC
 
 jobs:
   sync_issues:
@@ -24,59 +24,47 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          const { Octokit } = require("@octokit/core");
+          const { Octokit } = require("@octokit/rest");
+          const github = new Octokit({ auth: process.env.GITHUB_TOKEN });
 
-          const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
-
-          const targetProjectId = '6';
-          const sourceProjectIds = ['1', '2'];
-          // Replace with your list of assignees
-          const assigneesToSync = ["a-camarillo", "jennaxiao3", "aqvilala", "raymondOT", "jshii117", "lilyxmeng", "razlze", "leafie8"]; 
-          
-          const getIssuesWithAssignees = async (projectId) => {
-            const response = await octokit.request('GET /projects/{projectId}/columns', {
-              projectId,
-              mediaType: {
-                previews: ["inertia"],
-              },
+          const getIssueIDs = async (projectId) => {
+            const response = await github.projects.listCards({
+              project_id: projectId
             });
 
-            const columnId = response.data[0].id;
-
-            const cardsResponse = await octokit.request('GET /projects/columns/{columnId}/cards', {
-              columnId,
-              mediaType: {
-                previews: ["inertia"],
-              },
-            });
-
-            const issues = await Promise.all(cardsResponse.data.map(async (card) => {
-              const issueResponse = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
-                owner: card.content_url.split('/')[4],
-                repo: card.content_url.split('/')[5],
-                issue_number: card.content_url.split('/')[7],
-              });
-              
-              return issueResponse.data;
-            }));
-
-            return issues.filter((issue) =>
-              assigneesToSync.includes(issue.assignee?.login)
-            );
+            return response.data
+              .filter(card => card.content_url.includes("/issues/"))
+              .map(card => card.content_url.split("/").pop());
           };
 
-          const syncIssues = async (issues, projectId) => {
-            for (const issue of issues) {
-              await octokit.request('POST /projects/columns/{columnId}/cards', {
-                columnId: projectId,
-                content_id: issue.number,
-                content_type: 'Issue',
+          const syncIssues = async (issueIDs, projectId) => {
+            for (const issueID of issueIDs) {
+              await github.projects.createCard({
+                project_id: projectId,
+                content_type: "Issue",
+                content_id: issueID
               });
             }
           };
 
+          const targetProjectId = "6";
+          const sourceProjectIds = ["1", "2"];
+          const assigneeList = ["a-camarillo", "jennaxiao3", "aqvilala", "raymondOT", "jshii117", "lilyxmeng", "razlze", "leafie8"];
+
+          const assigneeIssues = [];
+
           for (const projectId of sourceProjectIds) {
-            const issues = await getIssuesWithAssignees(projectId);
-            await syncIssues(issues, targetProjectId);
+            const issueIDs = await getIssueIDs(projectId);
+
+            for (const issueID of issueIDs) {
+              const issue = await github.issues.get({
+                issue_number: issueID,
+              });
+
+              if (assigneeList.includes(issue.data.assignee.login)) {
+                assigneeIssues.push(issueID);
+              }
+            }
           }
 
+          await syncIssues(assigneeIssues, targetProjectId);
