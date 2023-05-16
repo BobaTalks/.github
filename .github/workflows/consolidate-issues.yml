@@ -17,54 +17,44 @@ jobs:
         with:
           node-version: '14'
 
-      - name: Install Dependencies
-        run: npm install @actions/github
-
       - name: Sync Issues
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          const { Octokit } = require("@octokit/rest");
-          const github = new Octokit({ auth: process.env.GITHUB_TOKEN });
+          assigneeList=("a-camarillo" "jennaxiao3" "aqvilala" "raymondOT" "jshii117" "lilyxmeng" "razlze" "leafie8")
+          targetProjectId="6"
+          organization="bobatalks"
 
-          const getIssueIDs = async (projectId) => {
-            const response = await github.projects.listCards({
-              project_id: projectId
-            });
-
-            return response.data
-              .filter(card => card.content_url.includes("/issues/"))
-              .map(card => card.content_url.split("/").pop());
-          };
-
-          const syncIssues = async (issueIDs, projectId) => {
-            for (const issueID of issueIDs) {
-              await github.projects.createCard({
-                project_id: projectId,
-                content_type: "Issue",
-                content_id: issueID
-              });
-            }
-          };
-
-          const targetProjectId = "6";
-          const sourceProjectIds = ["1", "2"];
-          const assigneeList = ["a-camarillo", "jennaxiao3", "aqvilala", "raymondOT", "jshii117", "lilyxmeng", "razlze", "leafie8"];
-
-          const assigneeIssues = [];
-
-          for (const projectId of sourceProjectIds) {
-            const issueIDs = await getIssueIDs(projectId);
-
-            for (const issueID of issueIDs) {
-              const issue = await github.issues.get({
-                issue_number: issueID,
-              });
-
-              if (assigneeList.includes(issue.data.assignee.login)) {
-                assigneeIssues.push(issueID);
-              }
-            }
+          getIssueIDs() {
+            local projectId=$1
+            local response=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/projects/$projectId/columns")
+            local issueIDs=$(echo "$response" | jq -r '.[].cards[].content_url | select(contains("/issues/")) | split("/") | .[-1]')
+            echo "$issueIDs"
           }
 
-          await syncIssues(assigneeIssues, targetProjectId);
+          syncIssues() {
+            local issueIDs=("$@")
+            for issueID in "${issueIDs[@]}"; do
+              curl -s -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github.inertia-preview+json" \
+                -d '{"content_type": "Issue", "content_id": "'"$issueID"'"}' \
+                "https://api.github.com/projects/$targetProjectId/columns/$columnId/cards"
+            done
+          }
+
+          assigneeIssues=()
+
+          projectIDs=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/orgs/$organization/projects" | jq -r '.[].id')
+
+          for projectId in $projectIDs; do
+            issueIDs=$(getIssueIDs "$projectId")
+
+            for issueID in $issueIDs; do
+              issue=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/projects/columns/cards/$issueID")
+              assignee=$(echo "$issue" | jq -r '.assignee.login')
+              if [[ " ${assigneeList[@]} " =~ " $assignee " ]]; then
+                assigneeIssues+=("$issueID")
+              fi
+            done
+          done
+
+          syncIssues "${assigneeIssues[@]}"
